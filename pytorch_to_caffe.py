@@ -400,19 +400,37 @@ def _interpolate(raw, input,size=None, scale_factor=None, mode='nearest', align_
     # 出图像尺寸的数值。在 Upsample 的相关代码中,推荐仅仅使用 upsample_h、
     # upsample_w 准确定义 Upsample 层的输出尺寸,其他所有的参数都不推荐继续使用。
     # for nearest _interpolate
-    if mode != "nearest" or align_corners != None:
-        raise NotImplementedError("not implement F.interpolate totoaly")
-    x = raw(input,size , scale_factor ,mode)
+    
+    
+    # --------------raw implement:
+    # if mode != "nearest" or align_corners != None:
+    #     raise NotImplementedError("not implement F.interpolate totoaly")
+    # x = raw(input,size , scale_factor ,mode)
 
-    layer_name = log.add_layer(name='upsample')
-    top_blobs = log.add_blobs([x], name='upsample_blob'.format(type))
-    layer = caffe_net.Layer_param(name=layer_name, type='Upsample',
+    # layer_name = log.add_layer(name='upsample')
+    # top_blobs = log.add_blobs([x], name='upsample_blob'.format(type))
+    # layer = caffe_net.Layer_param(name=layer_name, type='Upsample',
+    #                               bottom=[log.blobs(input)], top=top_blobs)
+
+    # layer.upsample_param(size =(input.size(2),input.size(3)), scale_factor= scale_factor)
+    # log.cnet.add_layer(layer)
+    # return x
+
+    # --------------current implement:
+    # when F.interpolate used in pytorch, replace it with deconv
+    x = raw(input, size, scale_factor, mode, align_corners)
+    name = log.add_layer(name='upsample')
+    top_blobs = log.add_blobs([x], name='upsample')
+    layer = caffe_net.Layer_param(name=name, type='Deconvolution',
                                   bottom=[log.blobs(input)], top=top_blobs)
 
-    layer.upsample_param(size =(input.size(2),input.size(3)), scale_factor= scale_factor)
+    scale_factor = int(scale_factor)
+    layer.conv_param(x.size()[1], kernel_size=scale_factor*2, stride=_pair(scale_factor),
+                    pad=_pair(1),bias_term=False, groups=x.size()[1], weight_filler_type=mode)
+
+    # layer.add_data(weight.cpu().data.numpy())
     log.cnet.add_layer(layer)
     return x
-
 
 #sigmid layer
 def _sigmoid(raw, input):
