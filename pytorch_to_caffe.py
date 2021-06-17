@@ -23,6 +23,8 @@ Please MUTE the inplace operations to avoid not find in graph
 """
 
 # TODO: support the inplace output of the layers
+relu_bottom_top = {}
+
 
 class Blob_LOG():
     def __init__(self):
@@ -101,9 +103,16 @@ def _conv2d(raw,input, weight, bias=None, stride=1, padding=0, dilation=1, group
     print('conv: ',log.blobs(input))
     x=raw(input,weight,bias,stride,padding,dilation,groups)
     name=log.add_layer(name='conv')
-    log.add_blobs([x],name='conv_blob')
+    log.add_blobs([x],name='conv')
+    
+    bottom_name = log.blobs(input)
+    if bottom_name in relu_bottom_top.keys():
+        relu_top = relu_bottom_top[bottom_name]
+    else:
+        relu_top = bottom_name
+
     layer=caffe_net.Layer_param(name=name, type='Convolution',
-                                bottom=[log.blobs(input)], top=[log.blobs(x)])
+                                bottom=[relu_top], top=[log.blobs(x)])
     layer.conv_param(x.size()[1],weight.size()[2:],stride=_pair(stride),
                      pad=_pair(padding),dilation=_pair(dilation),bias_term=bias is not None,groups=groups)
     if bias is not None:
@@ -117,7 +126,7 @@ def _conv2d(raw,input, weight, bias=None, stride=1, padding=0, dilation=1, group
 def _conv_transpose2d(raw,input, weight, bias=None, stride=1, padding=0, output_padding=0, groups=1, dilation=1):
     x=raw(input, weight, bias, stride, padding, output_padding, groups, dilation)
     name=log.add_layer(name='conv_transpose')
-    log.add_blobs([x],name='conv_transpose_blob')
+    log.add_blobs([x],name='conv_transpose')
     layer=caffe_net.Layer_param(name=name, type='Deconvolution',
                                 bottom=[log.blobs(input)], top=[log.blobs(x)])
     layer.conv_param(x.size()[1],weight.size()[2:],stride=_pair(stride),
@@ -133,7 +142,7 @@ def _conv_transpose2d(raw,input, weight, bias=None, stride=1, padding=0, output_
 def _linear(raw,input, weight, bias=None):
     x=raw(input,weight,bias)
     layer_name=log.add_layer(name='fc')
-    top_blobs=log.add_blobs([x],name='fc_blob')
+    top_blobs=log.add_blobs([x],name='fc')
     layer=caffe_net.Layer_param(name=layer_name,type='InnerProduct',
                                 bottom=[log.blobs(input)],top=top_blobs)
     layer.fc_param(x.size()[1],has_bias=bias is not None)
@@ -148,7 +157,7 @@ def _split(raw,tensor, split_size, dim=0):
     # split in pytorch is slice in caffe
     x=raw(tensor, split_size, dim)
     layer_name=log.add_layer('split')
-    top_blobs=log.add_blobs(x,name='split_blob')
+    top_blobs=log.add_blobs(x,name='split')
     layer=caffe_net.Layer_param(name=layer_name, type='Slice',
                                 bottom=[log.blobs(tensor)], top=top_blobs)
     slice_num=int(np.floor(tensor.size()[dim]/split_size))
@@ -161,7 +170,7 @@ def _split(raw,tensor, split_size, dim=0):
 def _pool(type,raw,input,x,kernel_size,stride,padding,ceil_mode):
     # TODO dilation,ceil_mode,return indices
     layer_name = log.add_layer(name='{}_pool'.format(type))
-    top_blobs = log.add_blobs([x], name='{}_pool_blob'.format(type))
+    top_blobs = log.add_blobs([x], name='{}_pool'.format(type))
     layer = caffe_net.Layer_param(name=layer_name, type='Pooling',
                                   bottom=[log.blobs(input)], top=top_blobs)
     # TODO w,h different kernel, stride and padding
@@ -213,7 +222,7 @@ def _max(raw,*args):
         for arg in args:
             bottom_blobs.append(log.blobs(arg))
         layer_name=log.add_layer(name='max')
-        top_blobs=log.add_blobs([x],name='max_blob')
+        top_blobs=log.add_blobs([x],name='max')
         layer=caffe_net.Layer_param(name=layer_name,type='Eltwise',
                                     bottom=bottom_blobs,top=top_blobs)
         layer.param.eltwise_param.operation =2
@@ -226,7 +235,7 @@ def _cat(raw,inputs, dimension=0):
     for input in inputs:
         bottom_blobs.append(log.blobs(input))
     layer_name=log.add_layer(name='cat')
-    top_blobs=log.add_blobs([x],name='cat_blob')
+    top_blobs=log.add_blobs([x],name='cat')
     layer=caffe_net.Layer_param(name=layer_name,type='Concat',
                                 bottom=bottom_blobs,top=top_blobs)
     layer.param.concat_param.axis =dimension
@@ -251,7 +260,7 @@ def _threshold(raw,input, threshold, value, inplace=False):
         x = raw(input,threshold, value, inplace)
         bottom_blobs=[log.blobs(input)]
         name = log.add_layer(name='relu')
-        log.add_blobs([x], name='relu_blob')
+        log.add_blobs([x], name='relu')
         layer = caffe_net.Layer_param(name=name, type='ReLU',
                                       bottom=bottom_blobs, top=[log.blobs(x)])
         log.cnet.add_layer(layer)
@@ -261,7 +270,7 @@ def _threshold(raw,input, threshold, value, inplace=False):
     x=raw(input,input, threshold, value, inplace)
     bottom_blobs=[log.blobs(input)]
     layer_name=log.add_layer(name='threshold')
-    top_blobs=log.add_blobs([x],name='threshold_blob')
+    top_blobs=log.add_blobs([x],name='threshold')
     layer=caffe_net.Layer_param(name=layer_name,type='Threshold',
                                 bottom=bottom_blobs,top=top_blobs)
     layer.param.threshold_param.threshold = threshold
@@ -272,17 +281,24 @@ def _relu(raw, input, inplace=False):
     # for threshold or prelu
     x = raw(input, False)
     name = log.add_layer(name='relu')
-    log.add_blobs([x], name='relu_blob')
+    log.add_blobs([x], name='relu')
+    raw_bottom_name = log.blobs(input)
+    if 'batch_norm' in raw_bottom_name:
+        raw_bottom_name = raw_bottom_name.replace("batch_norm", "conv")
+    
     layer = caffe_net.Layer_param(name=name, type='ReLU',
-                                  bottom=[log.blobs(input)], top=[log.blobs(x)])
+                                  bottom=[raw_bottom_name], top=[raw_bottom_name])
     log.cnet.add_layer(layer)
+
+    relu_bottom_top[name] = raw_bottom_name
+
     return x
 def _prelu(raw, input, weight):
     # for threshold or prelu
     x = raw(input, weight)
     bottom_blobs=[log.blobs(input)]
     name = log.add_layer(name='prelu')
-    log.add_blobs([x], name='prelu_blob')
+    log.add_blobs([x], name='prelu')
     layer = caffe_net.Layer_param(name=name, type='PReLU',
                                   bottom=bottom_blobs, top=[log.blobs(x)])
     if weight.size()[0]==1:
@@ -296,7 +312,7 @@ def _prelu(raw, input, weight):
 def _leaky_relu(raw, input, negative_slope=0.01, inplace=False):
     x = raw(input, negative_slope)
     name = log.add_layer(name='leaky_relu')
-    log.add_blobs([x], name='leaky_relu_blob')
+    log.add_blobs([x], name='leaky_relu')
     layer = caffe_net.Layer_param(name=name, type='ReLU',
                                   bottom=[log.blobs(input)], top=[log.blobs(x)])
     layer.param.relu_param.negative_slope=negative_slope
@@ -307,7 +323,7 @@ def _tanh(raw, input):
     # for tanh activation
     x = raw(input)
     name = log.add_layer(name='tanh')
-    log.add_blobs([x], name='tanh_blob')
+    log.add_blobs([x], name='tanh')
     layer = caffe_net.Layer_param(name=name, type='TanH',
                                   bottom=[log.blobs(input)], top=[log.blobs(x)])
     log.cnet.add_layer(layer)
@@ -320,7 +336,7 @@ def _softmax(raw, input, dim=None, _stacklevel=3):
         dim=F._get_softmax_dim('softmax', input.dim(), _stacklevel)
     bottom_blobs=[log.blobs(input)]
     name = log.add_layer(name='softmax')
-    log.add_blobs([x], name='softmax_blob')
+    log.add_blobs([x], name='softmax')
     layer = caffe_net.Layer_param(name=name, type='Softmax',
                                   bottom=bottom_blobs, top=[log.blobs(x)])
     layer.param.softmax_param.axis=dim
@@ -335,9 +351,9 @@ def _batch_norm(raw,input, running_mean, running_var, weight=None, bias=None,
                training, momentum, eps)
     bottom_blobs = [log.blobs(input)]
     layer_name1 = log.add_layer(name='batch_norm')
-    top_blobs = log.add_blobs([x], name='batch_norm_blob')
+    top_blobs = log.add_blobs([x], name='batch_norm')
     layer1 = caffe_net.Layer_param(name=layer_name1, type='BatchNorm',
-                                   bottom=bottom_blobs, top=top_blobs)
+                                   bottom=bottom_blobs, top=bottom_blobs)
     if running_mean is None or running_var is None:
         # not use global_stats, normalization is performed over the current mini-batch
         layer1.batch_norm_param(use_global_stats=0,eps=eps)
@@ -350,7 +366,7 @@ def _batch_norm(raw,input, running_mean, running_var, weight=None, bias=None,
     if weight is not None and bias is not None:
         layer_name2 = log.add_layer(name='bn_scale')
         layer2 = caffe_net.Layer_param(name=layer_name2, type='Scale',
-                                       bottom=top_blobs, top=top_blobs)
+                                       bottom=bottom_blobs, top=bottom_blobs)
         layer2.param.scale_param.bias_term = True
         layer2.add_data(weight.cpu().data.numpy(), bias.cpu().data.numpy())
         log.cnet.add_layer(layer2)
@@ -368,7 +384,7 @@ def _instance_norm(raw, input, running_mean=None, running_var=None, weight=None,
         use_input_stats, momentum, eps,torch.backends.cudnn.enabled)
     bottom_blobs = [log.blobs(input)]
     layer_name1 = log.add_layer(name='instance_norm')
-    top_blobs = log.add_blobs([x], name='instance_norm_blob')
+    top_blobs = log.add_blobs([x], name='instance_norm')
     layer1 = caffe_net.Layer_param(name=layer_name1, type='BatchNorm',
                                    bottom=bottom_blobs, top=top_blobs)
     if running_mean is None or running_var is None:
@@ -408,7 +424,7 @@ def _interpolate(raw, input,size=None, scale_factor=None, mode='nearest', align_
     # x = raw(input,size , scale_factor ,mode)
 
     # layer_name = log.add_layer(name='upsample')
-    # top_blobs = log.add_blobs([x], name='upsample_blob'.format(type))
+    # top_blobs = log.add_blobs([x], name='upsample'.format(type))
     # layer = caffe_net.Layer_param(name=layer_name, type='Upsample',
     #                               bottom=[log.blobs(input)], top=top_blobs)
 
@@ -445,7 +461,7 @@ def _sigmoid(raw, input):
     # ​	
     x = raw(input)
     name = log.add_layer(name='sigmoid')
-    log.add_blobs([x], name='sigmoid_blob')
+    log.add_blobs([x], name='sigmoid')
     layer = caffe_net.Layer_param(name=name, type='Sigmoid',
                                   bottom=[log.blobs(input)], top=[log.blobs(x)])
     log.cnet.add_layer(layer)
@@ -460,7 +476,7 @@ def _tanh(raw, input):
     # ​	
     x = raw(input)
     name = log.add_layer(name='tanh')
-    log.add_blobs([x], name='tanh_blob')
+    log.add_blobs([x], name='tanh')
     layer = caffe_net.Layer_param(name=name, type='TanH',
                                   bottom=[log.blobs(input)], top=[log.blobs(x)])
     log.cnet.add_layer(layer)
@@ -475,7 +491,7 @@ def _hardtanh(raw, input, min_val, max_val, inplace):
     print('relu6: ', log.blobs(input))
     x = raw(input, min_val, max_val)
     name = log.add_layer(name='relu6')
-    log.add_blobs([x], name='relu6_blob')
+    log.add_blobs([x], name='relu6')
     layer = caffe_net.Layer_param(name=name, type='ReLU6',
                                   bottom=[log.blobs(input)], top=[log.blobs(x)])
     log.cnet.add_layer(layer)
@@ -490,7 +506,7 @@ def _l2Norm(raw, input, weight, eps):
     # ​
     x = raw(input, weight, eps)
     name = log.add_layer(name='normalize')
-    log.add_blobs([x], name='normalize_blob')
+    log.add_blobs([x], name='normalize')
     layer = caffe_net.Layer_param(name=name, type='Normalize',
                                   bottom=[log.blobs(input)], top=[log.blobs(x)])
     layer.norm_param(eps)
@@ -501,7 +517,7 @@ def _l2Norm(raw, input, weight, eps):
 
 def _div(raw,inputs, inputs2):
     x=raw(inputs, inputs2)
-    log.add_blobs([x],name='div_blob')
+    log.add_blobs([x],name='div')
     return x
 
 
@@ -512,7 +528,7 @@ def _view(input, *args):
     if not NET_INITTED:
         return x
     layer_name=log.add_layer(name='view')
-    top_blobs=log.add_blobs([x],name='view_blob')
+    top_blobs=log.add_blobs([x],name='view')
     layer=caffe_net.Layer_param(name=layer_name,type='Reshape',
                                 bottom=[log.blobs(input)],top=top_blobs)
     # TODO: reshpae added to nn_tools layer
@@ -527,7 +543,7 @@ def _mean(input, *args,**kwargs):
     if not NET_INITTED:
         return x
     layer_name=log.add_layer(name='mean')
-    top_blobs=log.add_blobs([x],name='mean_blob')
+    top_blobs=log.add_blobs([x],name='mean')
     layer=caffe_net.Layer_param(name=layer_name,type='Reduction',
                                 bottom=[log.blobs(input)],top=top_blobs)
     if len(args)==1:
@@ -546,9 +562,9 @@ def _add(input, *args):
     if not NET_INITTED:
         return x
     layer_name = log.add_layer(name='add')
-    top_blobs = log.add_blobs([x], name='add_blob')
+    top_blobs = log.add_blobs([x], name='add')
     if log.blobs(args[0]) == None:
-        log.add_blobs([args[0]], name='extra_blob')
+        log.add_blobs([args[0]], name='extra')
     else:
         layer = caffe_net.Layer_param(name=layer_name, type='Eltwise',
                                       bottom=[log.blobs(input),log.blobs(args[0])], top=top_blobs)
@@ -562,7 +578,7 @@ def _iadd(input, *args):
         return x
     x=x.clone()
     layer_name = log.add_layer(name='add')
-    top_blobs = log.add_blobs([x], name='add_blob')
+    top_blobs = log.add_blobs([x], name='add')
     layer = caffe_net.Layer_param(name=layer_name, type='Eltwise',
                                   bottom=[log.blobs(input),log.blobs(args[0])], top=top_blobs)
     layer.param.eltwise_param.operation = 1 # sum is 1
@@ -574,7 +590,7 @@ def _sub(input, *args):
     if not NET_INITTED:
         return x
     layer_name = log.add_layer(name='sub')
-    top_blobs = log.add_blobs([x], name='sub_blob')
+    top_blobs = log.add_blobs([x], name='sub')
     layer = caffe_net.Layer_param(name=layer_name, type='Eltwise',
                                   bottom=[log.blobs(input),log.blobs(args[0])], top=top_blobs)
     layer.param.eltwise_param.operation = 1 # sum is 1
@@ -588,7 +604,7 @@ def _isub(input, *args):
         return x
     x=x.clone()
     layer_name = log.add_layer(name='sub')
-    top_blobs = log.add_blobs([x], name='sub_blob')
+    top_blobs = log.add_blobs([x], name='sub')
     layer = caffe_net.Layer_param(name=layer_name, type='Eltwise',
                                   bottom=[log.blobs(input),log.blobs(args[0])], top=top_blobs)
     layer.param.eltwise_param.operation = 1 # sum is 1
@@ -600,7 +616,7 @@ def _mul(input, *args):
     if not NET_INITTED:
         return x
     layer_name = log.add_layer(name='mul')
-    top_blobs = log.add_blobs([x], name='mul_blob')
+    top_blobs = log.add_blobs([x], name='mul')
     layer = caffe_net.Layer_param(name=layer_name, type='Eltwise',
                                   bottom=[log.blobs(input), log.blobs(args[0])], top=top_blobs)
     layer.param.eltwise_param.operation = 0  # product is 1
@@ -613,7 +629,7 @@ def _imul(input, *args):
         return x
     x = x.clone()
     layer_name = log.add_layer(name='mul')
-    top_blobs = log.add_blobs([x], name='mul_blob')
+    top_blobs = log.add_blobs([x], name='mul')
     layer = caffe_net.Layer_param(name=layer_name, type='Eltwise',
                                   bottom=[log.blobs(input), log.blobs(args[0])], top=top_blobs)
     layer.param.eltwise_param.operation = 0  # product is 1
@@ -626,7 +642,7 @@ def _imul(input, *args):
 def _permute(input, *args):
     x = raw__permute__(input, *args)
     name = log.add_layer(name='permute')
-    log.add_blobs([x], name='permute_blob')
+    log.add_blobs([x], name='permute')
     layer = caffe_net.Layer_param(name=name, type='Permute',
                                   bottom=[log.blobs(input)], top=[log.blobs(x)])
     order1 = args[0]
@@ -642,7 +658,7 @@ def _permute(input, *args):
 def _contiguous(input, *args):
     x = raw__contiguous__(input, *args)
     name = log.add_layer(name='contiguous')
-    log.add_blobs([x], name='contiguous_blob')
+    log.add_blobs([x], name='contiguous')
     layer = caffe_net.Layer_param(name=name, type='NeedRemove',
                                   bottom=[log.blobs(input)], top=[log.blobs(x)])
     log.cnet.add_layer(layer)
@@ -651,25 +667,25 @@ def _contiguous(input, *args):
 #pow
 def _pow(input, *args):
     x = raw__pow__(input, *args)
-    log.add_blobs([x], name='pow_blob')
+    log.add_blobs([x], name='pow')
     return x
 
 #sum
 def _sum(input, *args):
     x = raw__sum__(input, *args)
-    log.add_blobs([x], name='sum_blob')
+    log.add_blobs([x], name='sum')
     return x
 
 # sqrt
 def _sqrt(input, *args):
     x = raw__sqrt__(input, *args)
-    log.add_blobs([x], name='sqrt_blob')
+    log.add_blobs([x], name='sqrt')
     return x
 
 # unsqueeze
 def _unsqueeze(input, *args):
     x = raw__unsqueeze__(input, *args)
-    log.add_blobs([x], name='unsqueeze_blob')
+    log.add_blobs([x], name='unsqueeze')
     return x
 
 def _expand_as(input, *args):
@@ -677,7 +693,7 @@ def _expand_as(input, *args):
     
     x = raw__expand_as__(input, *args)
     layer_name = log.add_layer(name="expand_as", with_num=True)
-    log.add_blobs([x], name='expand_as_blob')
+    log.add_blobs([x], name='expand_as')
     layer = caffe_net.Layer_param(name=layer_name, type='Convolution',
                                   bottom=[log.blobs(input)], top=[log.blobs(x)])
 
