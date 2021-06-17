@@ -425,8 +425,12 @@ def _interpolate(raw, input,size=None, scale_factor=None, mode='nearest', align_
                                   bottom=[log.blobs(input)], top=top_blobs)
 
     scale_factor = int(scale_factor)
-    layer.conv_param(x.size()[1], kernel_size=scale_factor*2, stride=_pair(scale_factor),
-                    pad=_pair(1),bias_term=False, groups=x.size()[1], weight_filler_type=mode)
+    if mode == 'nearest':
+        layer.conv_param(x.size()[1], kernel_size=scale_factor, stride=_pair(scale_factor),
+                        pad=_pair(0),bias_term=False, groups=x.size()[1], weight_filler_type=mode)
+    elif mode == 'bilinear':
+        layer.conv_param(x.size()[1], kernel_size=scale_factor*2, stride=_pair(scale_factor),
+                        pad=_pair(1),bias_term=False, groups=x.size()[1], weight_filler_type=mode)
 
     # layer.add_data(weight.cpu().data.numpy())
     log.cnet.add_layer(layer)
